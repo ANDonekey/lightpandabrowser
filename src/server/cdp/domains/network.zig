@@ -913,8 +913,8 @@ test "cdp.network setExtraHTTPHeaders accepts a Mozilla User-Agent" {
     const bc = &ctx.cdp().browser_context.?;
     const target = try testing.firstTarget(bc);
     try testing.expectEqual(1, target.extra_headers.items.len);
-    try testing.expectEqualStrings("User-Agent", target.extra_headers.items[0].name);
-    try testing.expectEqualStrings("Mozilla/5.0", target.extra_headers.items[0].value);
+    try std.testing.expectEqualStrings("User-Agent", target.extra_headers.items[0].name);
+    try std.testing.expectEqualStrings("Mozilla/5.0", target.extra_headers.items[0].value);
 }
 
 test "cdp.network setExtraHTTPHeaders accepts valid User-Agent" {
