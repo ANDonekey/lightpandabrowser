@@ -898,9 +898,7 @@ test "cdp.network setExtraHTTPHeaders rejects non-printable User-Agent" {
     try testing.expectEqual("hi", target.extra_headers.items[0].value);
 }
 
-test "cdp.network setExtraHTTPHeaders rejects a Mozilla User-Agent" {
-    testing.silenceLog(&.{.cdp});
-
+test "cdp.network setExtraHTTPHeaders accepts a Mozilla User-Agent" {
     var ctx = try testing.context();
     defer ctx.deinit();
 
@@ -913,7 +911,10 @@ test "cdp.network setExtraHTTPHeaders rejects a Mozilla User-Agent" {
     });
 
     const bc = &ctx.cdp().browser_context.?;
-    try testing.expectEqual((try testing.firstTarget(bc)).extra_headers.items.len, 0);
+    const target = try testing.firstTarget(bc);
+    try testing.expectEqual(1, target.extra_headers.items.len);
+    try testing.expectEqualStrings("User-Agent", target.extra_headers.items[0].name);
+    try testing.expectEqualStrings("Mozilla/5.0", target.extra_headers.items[0].value);
 }
 
 test "cdp.network setExtraHTTPHeaders accepts valid User-Agent" {
@@ -932,7 +933,7 @@ test "cdp.network setExtraHTTPHeaders accepts valid User-Agent" {
     try testing.expectEqual((try testing.firstTarget(bc)).extra_headers.items.len, 1);
 }
 
-test "cdp.network setExtraHTTPHeaders rejects a Mozilla User-Agent smuggled via a colon in the key" {
+test "cdp.network setExtraHTTPHeaders rejects a User-Agent smuggled via a colon in the key" {
     testing.silenceLog(&.{.cdp});
 
     var ctx = try testing.context();
@@ -942,7 +943,8 @@ test "cdp.network setExtraHTTPHeaders rejects a Mozilla User-Agent smuggled via 
 
     // A colon in the key would desync the stored name from what lands on the
     // wire once the pair is joined: "User-Agent:Mozilla/5.0 (X: Y)" parses to
-    // name="User-Agent", value="Mozilla/5.0 (X: Y)" on the wire.
+    // name="User-Agent", value="Mozilla/5.0 (X: Y)" on the wire. The key isn't
+    // an HTTP token, so the pair is dropped regardless of the user agent.
     try ctx.processMessage(.{
         .id = 3,
         .method = "Network.setExtraHTTPHeaders",

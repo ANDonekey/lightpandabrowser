@@ -1486,11 +1486,16 @@ test "Config: advertiseHost preserves concrete host when not a wildcard" {
     try std.testing.expectEqualStrings("127.0.0.1", config.advertiseHost());
 }
 
-test "Config: parseArgs refuses a mozilla user-agent" {
-    log.expectLog(&.{.app});
-    const argv = [_][*:0]const u8{ "lightpanda", "fetch", "--user-agent", "mozilla/1.0" };
+test "Config: parseArgs accepts a mozilla user-agent" {
+    // parseArgs allocations live for the process; an arena stands in for main's.
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    const ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
+    const argv = [_][*:0]const u8{ "lightpanda", "fetch", "--user-agent", ua, "https://example.com" };
     const proc_args: std.process.Args = .{ .vector = &argv };
-    try std.testing.expectError(error.InvalidArgument, parseArgs(std.testing.allocator, proc_args));
+    const config = try parseArgs(arena.allocator(), proc_args);
+    try std.testing.expectEqualStrings(ua, config.userAgent().?);
 }
 
 test "Config: parseArgs --http-version" {
@@ -1653,9 +1658,12 @@ test "Config: parseArgs tells a url from a misspelt command" {
 
 test "Config: validateUserAgent" {
     try validateUserAgent("Lightpanda/1.0");
-    try std.testing.expectError(error.Reserved, validateUserAgent("mozilla/1.0"));
-    try std.testing.expectError(error.Reserved, validateUserAgent("Mozilla/5.0"));
+    try validateUserAgent("mozilla/1.0");
+    try validateUserAgent("MOZILLA/5.0");
+    try validateUserAgent("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36");
     try std.testing.expectError(error.NonPrintable, validateUserAgent("bad\x01ua"));
+    // CR and LF stay rejected: this is the header-injection guard.
+    try std.testing.expectError(error.NonPrintable, validateUserAgent("Mozilla/5.0\r\nX-Injected: 1"));
 }
 
 test "Config: validateLocale" {
@@ -1862,22 +1870,26 @@ fn accumulateValidator(allocator: Allocator, args: *std.process.Args.Iterator, f
 fn userAgentValidator(allocator: Allocator, args: *std.process.Args.Iterator, ua: *?[]const u8) !void {
     const str = args.next() orelse return error.MissingArgument;
     validateUserAgent(str) catch |err| {
-        log.fatal(.app, "invalid user-agent", .{ .err = err, .hint = "must be printable ASCII and can't contain Mozilla" });
+        log.fatal(.app, "invalid user-agent", .{ .err = err, .hint = "must be printable ASCII" });
         return error.InvalidArgument;
     };
 
     ua.* = try allocator.dupe(u8, str);
 }
 
+// Fork-local change: upstream refuses any value containing "mozilla" so a
+// Lightpanda client can't impersonate another browser. That rule is dropped
+// here on purpose — this build points at sites that gate on the User-Agent,
+// which is exactly what the rule made impossible.
+//
+// What stays is the printable-ASCII check. It is a wire-safety rule, not an
+// identity one: CR, LF and NUL would let a value break out of its header line
+// (or out of the CDP parameter carrying it), so they must never pass.
 pub fn validateUserAgent(ua: []const u8) !void {
     for (ua) |c| {
         if (!std.ascii.isPrint(c)) {
             return error.NonPrintable;
         }
-    }
-
-    if (std.ascii.findIgnoreCase(ua, "mozilla") != null) {
-        return error.Reserved;
     }
 }
 

@@ -1,0 +1,66 @@
+name: fork build
+
+# Fork-local workflow. Upstream's release.yml can't be used here: it needs the
+# org's AWS credentials and publishes a nightly release. This one only builds
+# the Linux x86_64 binary and uploads it as a downloadable artifact.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "src/**"
+      - "build.zig"
+      - "build.zig.zon"
+      - ".github/workflows/fork-build.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: build linux x86_64
+    runs-on: ubuntu-22.04
+    timeout-minutes: 40
+
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      # Installs Zig (version from build.zig.zon), Rust, and fetches the
+      # prebuilt libc_v8.a from lightpanda-io/zig-v8-fork's public releases.
+      - uses: ./.github/actions/install
+
+      # Same two-step build as release.yml: the V8 snapshot has to exist before
+      # `zig build` can @embedFile it.
+      - name: v8 snapshot
+        run: zig build -Dprebuilt_v8_path=v8/libc_v8.a -Doptimize=fast snapshot_creator -- src/snapshot.bin
+
+      - name: zig build
+        run: zig build -Dsnapshot_path=../../snapshot.bin -Dprebuilt_v8_path=v8/libc_v8.a -Doptimize=fast -Dcpu=x86_64 -Dversion=dev
+
+      # Cheap proof the binary runs and the fork's user-agent change is in: the
+      # CLI would exit non-zero here if a Mozilla value were still refused.
+      - name: smoke test
+        run: |
+          ./zig-out/bin/lightpanda version
+          UA="Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+          ./zig-out/bin/lightpanda fetch --user-agent "$UA" --dump html https://example.com > /tmp/dump.html
+          test -s /tmp/dump.html
+          head -5 /tmp/dump.html
+
+      - name: split debug info
+        run: |
+          objcopy --only-keep-debug --compress-debug-sections=zlib zig-out/bin/lightpanda lightpanda.debug
+          objcopy --strip-all --add-gnu-debuglink=lightpanda.debug zig-out/bin/lightpanda
+          ls -l zig-out/bin/lightpanda lightpanda.debug
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: lightpanda-x86_64-linux
+          path: |
+            zig-out/bin/lightpanda
+            lightpanda.debug
+          retention-days: 14

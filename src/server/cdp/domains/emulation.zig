@@ -151,26 +151,18 @@ pub fn setUserAgentOverride(cmd: *CDP.Command) !void {
     }
 
     const ua = params.userAgent;
-    const reserved = if (Config.validateUserAgent(ua)) false else |err| switch (err) {
+    Config.validateUserAgent(ua) catch |err| switch (err) {
         error.NonPrintable => return cmd.sendError(-32602, "User agent contains non-printable characters", .{}),
-        error.Reserved => true,
     };
 
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
     const http_client = &cmd.cdp.browser.http_client;
 
-    // Applied even when the user agent is refused below: Playwright always
-    // sends a Mozilla user agent alongside the locale it was asked for.
     if (params.acceptLanguage) |accept_language| {
         if (!Mime.isHttpHeaderValue(accept_language)) {
             return cmd.sendError(-32602, "Accept-Language contains CR, LF or NUL", .{});
         }
         try http_client.setAcceptLanguageOverride(accept_language);
-    }
-
-    if (reserved) {
-        log.warn(.cdp, "Emulation.setUserAgentOverride", .{ .param = "userAgent", .value = ua, .info = "User agent must not contain Mozilla. The `userAgent` parameter was ignored." });
-        return cmd.sendResult(null, .{});
     }
 
     try http_client.setUserAgentOverride(ua);
@@ -492,9 +484,7 @@ test "cdp.Emulation: setUserAgentOverride with valid user agent" {
     try ctx.expectSentResult(null, .{ .id = 1 });
 }
 
-test "cdp.Emulation: setUserAgentOverride ignores mozilla" {
-    testing.expectLog(&.{.cdp});
-
+test "cdp.Emulation: setUserAgentOverride applies a mozilla user agent" {
     var ctx = try testing.context();
     defer ctx.deinit();
     _ = try ctx.loadBrowserContext(.{ .id = "BID-UA2" });
@@ -505,13 +495,12 @@ test "cdp.Emulation: setUserAgentOverride ignores mozilla" {
         .params = .{ .userAgent = "Mozilla/5.0 (Windows NT 10.0)" },
     });
 
-    try ctx.expectSentResult(null, .{});
-    try testing.expectEqual(false, ctx.cdp().browser_context.?.user_agent_changed);
+    try ctx.expectSentResult(null, .{ .id = 2 });
+    try testing.expectEqual(true, ctx.cdp().browser_context.?.user_agent_changed);
+    try std.testing.expectEqualStrings("Mozilla/5.0 (Windows NT 10.0)", ctx.cdp().browser.http_client.getUserAgent());
 }
 
-test "cdp.Emulation: setUserAgentOverride ignores mozilla case insensitive" {
-    testing.expectLog(&.{.cdp});
-
+test "cdp.Emulation: setUserAgentOverride does not scan the user agent case insensitively" {
     var ctx = try testing.context();
     defer ctx.deinit();
     _ = try ctx.loadBrowserContext(.{ .id = "BID-UA3" });
@@ -522,8 +511,9 @@ test "cdp.Emulation: setUserAgentOverride ignores mozilla case insensitive" {
         .params = .{ .userAgent = "MOZILLA/5.0 test" },
     });
 
-    try ctx.expectSentResult(null, .{});
-    try testing.expectEqual(false, ctx.cdp().browser_context.?.user_agent_changed);
+    try ctx.expectSentResult(null, .{ .id = 3 });
+    try testing.expectEqual(true, ctx.cdp().browser_context.?.user_agent_changed);
+    try std.testing.expectEqualStrings("MOZILLA/5.0 test", ctx.cdp().browser.http_client.getUserAgent());
 }
 
 test "cdp.Emulation: setUserAgentOverride rejects non-printable characters" {
@@ -583,7 +573,7 @@ test "cdp.Emulation: setUserAgentOverride acceptLanguage drives navigator.langua
     try expectJs(frame, "navigator.language === 'de-DE' && navigator.languages.join() === 'de-DE,de,en'");
     try std.testing.expectEqualStrings("de-DE,de;q=0.9, en;q=0.8", ctx.cdp().browser.http_client.getAcceptLanguage());
 
-    // A Mozilla user agent is refused, the language still applies.
+    // A Mozilla user agent now reaches both the HTTP client and navigator.
     try ctx.processMessage(.{
         .id = 2,
         .method = "Emulation.setUserAgentOverride",
@@ -591,7 +581,8 @@ test "cdp.Emulation: setUserAgentOverride acceptLanguage drives navigator.langua
     });
     try ctx.expectSentResult(null, .{ .id = 2 });
     try expectJs(frame, "navigator.language === 'fr-FR' && navigator.languages.length === 1");
-    try std.testing.expectEqualStrings("CustomBot/2.0", ctx.cdp().browser.http_client.getUserAgent());
+    try std.testing.expectEqualStrings("Mozilla/5.0", ctx.cdp().browser.http_client.getUserAgent());
+    try expectJs(frame, "navigator.userAgent === 'Mozilla/5.0'");
 
     try ctx.processMessage(.{
         .id = 3,
