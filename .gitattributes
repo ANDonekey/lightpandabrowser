@@ -1,0 +1,5 @@
+# CI runs `zig fmt --check` on Linux, and zig fmt rejects CRLF, so every text
+# file is stored and checked out with LF regardless of the local
+# core.autocrlf. Without this, a Windows checkout re-adds CRLF and the fmt job
+# fails with no hint about why.
+* text=auto eol=lf
