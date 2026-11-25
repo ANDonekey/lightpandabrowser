@@ -553,8 +553,6 @@ test "cdp.Emulation: setUserAgentOverride with optional params" {
 }
 
 test "cdp.Emulation: setUserAgentOverride acceptLanguage drives navigator.languages" {
-    testing.expectLog(&.{.cdp});
-
     var ctx = try testing.context();
     defer ctx.deinit();
     const bc = try ctx.loadBrowserContext(.{ .id = "BID-AL", .url = "hi.html", .target_id = "FID-00000000AL".* });

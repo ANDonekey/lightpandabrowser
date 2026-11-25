@@ -4332,6 +4332,16 @@ pub const Transfer = struct {
     }
 
     fn putHeader(self: *Transfer, name: []const u8, value: []const u8, source: HeaderSource, mode: enum { set, append }) !void {
+        // A page can't rewrite the User-Agent. It's the browser's identity,
+        // owned by --user-agent / Emulation.setUserAgentOverride, and a value
+        // the page picked would also contradict navigator.userAgent. Upstream
+        // got this for free by dropping any value naming Mozilla; without that
+        // rule it needs to be said outright.
+        if (source == .author and std.ascii.eqlIgnoreCase(name, "user-agent")) {
+            log.debug(.http, "ignore authored header", .{ .header = name, .value = value });
+            return;
+        }
+
         if (verifyHeader(name, value) == false) {
             return;
         }
@@ -5707,13 +5717,18 @@ test "HttpClient: Transfer header layering" {
     try transfer.appendHeader("SEC-CH-UA", "\"Chromium\";v=\"140\"", .{ .source = .author });
     try testing.expectEqual("\"Lightpanda\";v=\"1\"", transfer.findRequestHeader("sec-ch-ua").?);
 
-    // an invalid User-Agent never enters the list
+    // an authored User-Agent never enters the list, whatever its value: the
+    // header belongs to --user-agent / Emulation.setUserAgentOverride, and
+    // Chrome drops it from script too
     try transfer.setHeader("user-agent", "Mozilla/5.0", .{ .source = .author });
     try testing.expectEqual("Lightpanda/1.0", transfer.findRequestHeader("user-agent").?);
 
-    // a valid author User-Agent replaces the default
     try transfer.setHeader("User-Agent", "MyBot/2.0", .{ .source = .author });
-    try testing.expectEqual("MyBot/2.0", transfer.findRequestHeader("user-agent").?);
+    try testing.expectEqual("Lightpanda/1.0", transfer.findRequestHeader("user-agent").?);
+
+    // the layers that own the identity still override it
+    try transfer.setHeader("User-Agent", "CustomBot/2.0", .{ .source = .cdp });
+    try testing.expectEqual("CustomBot/2.0", transfer.findRequestHeader("user-agent").?);
 }
 
 test "HttpClient: Fetch header overrides restore after one hop" {
